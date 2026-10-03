@@ -558,6 +558,10 @@ button.row:active, .pk-row:active, .set-row:active { background: var(--s2); }
 .tip-r b { font-family: var(--font-num); font-size: 18px; font-weight: 600; color: var(--t1); }
 .tip-k { width: 10px; height: 10px; border-radius: 3px; }
 .tip-k.ln { width: 12px; height: 3px; border-radius: 2px; }
+.str-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; font-size: 14px; color: var(--t2); }
+.str-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.str-legend i { width: 14px; height: 3px; border-radius: 2px; }
+.str-legend b { color: var(--t1); font-size: 18px; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 13px; color: var(--t2); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
@@ -1613,6 +1617,39 @@ function setsPerMuscle() {
   return [...map.entries()].map(([m, n]) => ({ m, perWeek: n / 4 })).sort((a, b) => b.perWeek - a.perWeek);
 }
 
+/**
+ * Strength change per training day (Push / Pull / Legs …) over time.
+ * Every exercise is compared with its own first session in the range (its e1RM),
+ * so different lifts can be averaged: a session's value is the mean % change of
+ * the exercises done in it. 0 % = starting level.
+ */
+function strengthByType(days) {
+  const from = days ? startOfDay(Date.now()) - (days - 1) * DAY : -Infinity;
+  const base = new Map();
+  const byType = new Map();
+  for (const w of D.trained) {
+    if (w.start < from || w.end == null && w.id !== S.activeId) continue;
+    const changes = [];
+    const seen = new Set();
+    for (const e of w.entries) {
+      if (!e.sets.length || seen.has(e.exId)) continue;
+      seen.add(e.exId);
+      const sess = (D.sessions.get(e.exId) || []).find((s) => s.wid === w.id);
+      if (!sess || !(sess.e1 > 0)) continue;
+      if (!base.has(e.exId)) base.set(e.exId, sess.e1);
+      changes.push((sess.e1 / base.get(e.exId) - 1) * 100);
+    }
+    if (!changes.length) continue;
+    if (!byType.has(w.type)) byType.set(w.type, []);
+    byType.get(w.type).push({ x: w.start, y: avg(changes), n: changes.length });
+  }
+  const order = S.settings.dayTypes.map((t) => t.name);
+  return [...byType.entries()]
+    .filter(([, pts]) => pts.length >= 2)
+    .sort((a, b) => (order.indexOf(a[0]) < 0 ? 99 : order.indexOf(a[0])) - (order.indexOf(b[0]) < 0 ? 99 : order.indexOf(b[0])))
+    .map(([type, pts]) => ({ type, pts, last: pts[pts.length - 1].y }));
+}
+
 /** Rest days per complete week (excludes the current week). */
 function restDays(nWeeks = 12) {
   if (!D.trained.length) return { weeks: [], avg4: null, avg12: null };
@@ -1923,6 +1960,7 @@ function drawLine(el, spec) {
   if (x0 === x1) { x0 -= 3 * DAY; x1 += 3 * DAY; }
   let y0 = Math.min(...all.map((p) => p.y)), y1 = Math.max(...all.map((p) => p.y));
   if (spec.yZero) y0 = Math.min(0, y0);
+  if (spec.yIncludeZero) { y0 = Math.min(0, y0); y1 = Math.max(0, y1); }
   const padY = (y1 - y0) * 0.08 || Math.abs(y1) * 0.05 || 1;
   const nt = niceTicks(spec.yZero ? y0 : y0 - padY, y1 + padY, 4);
   const tickW = Math.max(...nt.ticks.map((t) => yFmt(t).length)) * 6.6 + 10;
@@ -1977,7 +2015,8 @@ function drawLine(el, spec) {
     let hc = '';
     const rows = [];
     for (const s of series) {
-      const p = s.pts.find((q) => q.x === best);
+      // carry: series logged on different days show their latest value up to this date
+      const p = spec.carry ? [...s.pts].filter((q) => q.x <= best).pop() : s.pts.find((q) => q.x === best);
       if (!p) continue;
       hc += `<circle cx="${X}" cy="${sy(p.y)}" r="5" fill="${s.color}" stroke="${SURFACE}" stroke-width="2"/>`;
       rows.push({ value: (s.fmt || yFmt)(p.y), label: series.length > 1 ? s.name : (p.note || ''), color: series.length > 1 ? s.color : null, line: true });
@@ -2113,6 +2152,7 @@ const UI = {
   exRange: 180,
   exMetric: 'e1',
   typeRange: 90,
+  strRange: 90,
   calMonth: monthStart(Date.now()),
   bodyRange: 90,
   bodyMetric: 'weight',
@@ -3364,7 +3404,7 @@ function progOverview() {
   const ws = weeklySeries(12), ms = monthlySeries(12), years = yearlyTotals();
   const thisW = ws.data[11], lastW = ws.data[10], thisM = ms.data[11], lastM = ms.data[10];
   const yearNow = years.find(([y]) => y === new Date().getFullYear());
-  let h = `<div class="tiles mt16">
+  let h = strengthPanel() + `<div class="tiles mt16">
     <div class="tile"><div class="tile-l">This week</div><div class="tile-v">${fmt.t(thisW.vol).replace(' t', '')}<small>t</small></div><div class="tile-d">last week ${fmt.t(lastW.vol)}</div></div>
     <div class="tile"><div class="tile-l">This month</div><div class="tile-v">${fmt.t(thisM.vol).replace(' t', '')}<small>t</small></div><div class="tile-d">last month ${fmt.t(lastM.vol)}</div></div>
     <div class="tile"><div class="tile-l">${new Date().getFullYear()} so far</div><div class="tile-v">${yearNow ? fmt.t(yearNow[1].vol).replace(' t', '') : 0}<small>t</small></div><div class="tile-d">${pl(yearNow ? yearNow[1].n : 0, 'workout')}</div></div>
@@ -3419,6 +3459,19 @@ function progOverview() {
     <div class="tile"><div class="tile-l">Favourite day</div><div class="tile-v sm">${at.favDay || '–'}</div><div class="tile-d">most workouts</div></div>
   </div></section>`;
   return h;
+}
+
+/** First chart on Progress: strength change per training day, one line each. */
+function strengthPanel() {
+  const days = UI.strRange === 'all' ? null : +(UI.strRange || 90);
+  const lines = strengthByType(days).slice(0, 6);
+  const pct = (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${fmt.n(round(Math.abs(v), 1))}%`;
+  const series = lines.map((l) => ({ name: l.type, color: typeColor(l.type), pts: l.pts, dots: 'last', fmt: pct }));
+  return `<section class="panel mt16"><div class="panel-h"><div class="panel-t">Strength progress</div><div class="panel-s">e1RM vs. start</div></div>
+    <div class="chips">${[[30, '1M'], [90, '3M'], [180, '6M'], [365, '1Y'], ['all', 'All']].map(([v, l]) => `<button class="chip sm${String(UI.strRange || 90) === String(v) ? ' on' : ''}" data-act="seg" data-seg="strRange" data-v="${v}">${l}</button>`).join('')}</div>
+    <div class="mt12">${chart({ type: 'line', height: 190, label: 'Strength progress per training day', series, yFmt: pct, yIncludeZero: true, carry: true, empty: 'Needs at least two sessions per training day in this range' })}</div>
+    ${lines.length ? `<div class="str-legend">${lines.map((l) => `<span><i style="background:${typeColor(l.type)}"></i>${esc(l.type)} <b class="num">${pct(l.last)}</b></span>`).join('')}</div>` : ''}
+    <p class="muted small mt8">Each exercise is compared with its own first session in the range, then averaged per workout. 0% = your starting level.</p></section>`;
 }
 
 function progExercise() {
