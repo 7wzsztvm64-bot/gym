@@ -369,7 +369,7 @@ button.row:active, .pk-row:active, .set-row:active { background: var(--s2); }
 .hero-alt { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; font-size: 14px; color: var(--t2); }
 .hero-alt > span { margin-right: 2px; }
 .hero-alt .chip { padding: 0 13px; }
-.hero-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 2px 0 4px; }
+.hero-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 2px 0 4px; }
 .hero-stats .num { display: block; font-size: 28px; line-height: 1.1; }
 .hero-stats label { font-size: 12px; color: var(--t2); }
 
@@ -401,7 +401,7 @@ button.row:active, .pk-row:active, .set-row:active { background: var(--s2); }
   content: ""; position: fixed; z-index: -1; left: 0; right: 0; top: 0; height: 340px; pointer-events: none;
   background: radial-gradient(90% 100% at 50% -10%, var(--ctx-b), transparent 70%);
 }
-.wk-top { padding: 6px 0 4px; text-align: center; }
+.wk-top { padding: 18px 0 8px; text-align: center; }
 .wk-clock { font-size: 68px; line-height: 1; letter-spacing: 0.01em; font-variant-numeric: tabular-nums; }
 .wk-stats { display: flex; justify-content: center; gap: 30px; margin-top: 10px; }
 .wk-stats div { display: flex; flex-direction: column; align-items: center; }
@@ -2180,7 +2180,7 @@ function goTab(name) {
 }
 
 window.addEventListener('popstate', () => {
-  if (Sheets.stack.length) { Sheets.popped(); return; }   // back gesture closes the top sheet
+  if (Sheets.popped()) return;
   closeDialog(null);
   if (UI.pendingTab) {
     const t = UI.pendingTab; UI.pendingTab = null;
@@ -2248,7 +2248,7 @@ function renderChrome(scr) {
     rb.style.setProperty('--ctx', c);
     rb.style.setProperty('--ctx-a', hexA(c, 0.45));
     const a = D.wAgg.get(aw.id) || { sets: 0 };
-    rb.innerHTML = `<button class="resume-in" data-act="resume"><span class="resume-dot"></span><span class="resume-txt"><b>${esc(aw.type)} in progress</b><span><span data-tick data-from="${aw.start}"></span>, ${pl(a.sets, 'set')}</span></span><span class="resume-go">Resume</span></button>`;
+    rb.innerHTML = `<button class="resume-in" data-act="resume"><span class="resume-dot"></span><span class="resume-txt"><b>${esc(aw.type)} in progress</b><span>${pl(a.sets, 'set')} logged</span></span><span class="resume-go">Resume</span></button>`;
     document.body.classList.add('has-resume');
   } else {
     rb.hidden = true;
@@ -2306,19 +2306,29 @@ const Sheets = {
   },
   top() { return this.stack[this.stack.length - 1]; },
   /** Close the top sheet (via history so the back gesture stays in sync). */
+  _skip: 0,
+  _waiters: [],
+  /** Close the top sheet right away; its history entry is removed in the background. */
   close() {
     return new Promise((res) => {
       const s = this.top();
       if (!s) return res();
-      if (this._resolve) return res();          // a close is already in flight
-      if (s.pushed && history.state && history.state.sheet) { this._resolve = res; history.back(); }
-      else { this.remove(); res(); }
+      this.remove();
+      if (s.pushed && history.state && history.state.sheet) {
+        let done = false;
+        const fin = () => { if (!done) { done = true; res(); } };
+        this._skip++;
+        this._waiters.push(fin);
+        history.back();
+        setTimeout(fin, 400);                     // never wait forever for popstate
+      } else res();
     });
   },
+  /** Called from popstate. Returns true when the event belonged to a sheet. */
   popped() {
-    this.remove();
-    const r = this._resolve; this._resolve = null;
-    if (r) r();
+    if (this._skip > 0) { this._skip--; const w = this._waiters.shift(); if (w) w(); return true; }
+    if (this.stack.length) { this.remove(); return true; }   // back gesture closed a sheet
+    return false;
   },
   remove() {
     const s = this.stack.pop();
@@ -2509,7 +2519,6 @@ function renderHome() {
       <div class="hero-k">${stale ? `Started ${esc(fmt.date(aw.start))}, still open` : 'In progress'}</div>
       <div class="hero-day">${esc(aw.type)}</div>
       <div class="hero-stats">
-        <div><span class="num" data-tick data-from="${aw.start}"></span><label>Time</label></div>
         <div><span class="num">${a.sets}</span><label>Sets</label></div>
         <div><span class="num">${fmt.int(a.vol)}</span><label>kg moved</label></div>
         <div><span class="num">${a.prs}</span><label>Records</label></div>
@@ -2634,13 +2643,11 @@ function renderWorkout(wid) {
 
   if (live) {
     h += `<section class="wk-top">
-      <div class="wk-clock num" data-tick data-from="${w.start}" aria-label="Workout time"></div>
       <div class="wk-stats">
         <div><span class="num">${a.sets}</span><label>sets</label></div>
         <div><span class="num">${fmt.int(a.vol)}</span><label>kg moved</label></div>
         <div><span class="num">${a.prs}</span><label>records</label></div>
       </div>
-      ${lastSetT ? `<div class="rest-chip">${ic('timer')}<span data-tick data-from="${lastSetT}"></span><span>since last set</span></div>` : ''}
     </section>`;
   } else {
     const durMin = w.end ? Math.round((w.end - w.start) / 60000) : 60;
@@ -2727,10 +2734,10 @@ function renderLogger(wid, eid) {
 
   let h = `<div class="ctx-wrap" style="${ctxStyle(color)}">`;
   h += `<header class="nb"><div class="nb-l"><button class="nb-back" data-act="back" data-fallback="workout/${wid}">${ic('left')}<span>Workout</span></button></div>
-    <div class="nb-title">${w.end == null ? `<span class="nb-clock" aria-label="Workout time">${ic('timer')}<span class="num" data-tick data-from="${w.start}"></span></span>` : esc(fmt.date(w.start))}</div>
+    <div class="nb-title">${w.end == null ? '' : esc(fmt.date(w.start))}</div>
     <div class="nb-r"><button class="ib plain" data-act="log-more" data-wid="${wid}" data-eid="${eid}" aria-label="Exercise options">${ic('more')}</button></div></header>`;
   h += `<div class="lg-head"><div><h1 class="lg-title">${esc(ex.name)}</h1><div class="lg-sub">${esc(ex.muscles.join(', ') || 'No muscle group')}</div></div>
-    ${w.end == null && lastSetT ? `<div class="rest-chip sm">${ic('timer')}<span data-tick data-from="${lastSetT}"></span></div>` : ''}</div>`;
+</div>`;
   if (ex.notes) h += `<button class="ex-note" data-act="edit-ex" data-id="${ex.id}">${ic('note')}<span>${esc(ex.notes)}</span></button>`;
 
   // Last time — tap a set to copy it into the editor
@@ -2920,7 +2927,7 @@ function pickerList() {
       <span class="pk-check">${ic('check')}</span></button>`;
   };
   let h = '';
-  if (q && !exact) h += `<button class="pk-row create" data-act="picker-create">${ic('plus')}<div class="row-main"><div class="row-title">Create “${esc(p.q.trim())}”</div><div class="row-sub">New exercise in your library</div></div></button>`;
+  if (!exact) h += `<button class="pk-row create" data-act="picker-create">${ic('plus')}<div class="row-main"><div class="row-title">${q ? `Create “${esc(p.q.trim())}”` : 'New exercise'}</div><div class="row-sub">${q ? 'Add it to your library' : 'Your own exercise, saved to your library'}</div></div></button>`;
   if (sugg.length) h += `<div class="list-h">Often on ${esc(w.type)} days</div><div class="group">${sugg.map(row).join('')}</div>`;
   if (rest.length) h += `<div class="list-h">${sugg.length ? 'All exercises' : 'Exercises'}</div><div class="group">${rest.map(row).join('')}</div>`;
   if (!sugg.length && !rest.length && !q) h += `<p class="muted center mt16">No exercises in this muscle group yet.</p>`;
@@ -3261,7 +3268,7 @@ function workoutCard(w, { exFilter } = {}) {
   return `<button class="hcard" data-act="${live ? 'resume' : 'open-w'}" data-id="${w.id}">
     <div class="hc-top">${typePill(w.type)}<span class="hc-date">${esc(fmt.date(w.start))}</span>${live ? '<span class="live">Live</span>' : ''}<span class="hc-time">${esc(fmt.time(w.start))}</span></div>
     <div class="hc-meta">
-      <div><span class="num">${live ? '<span data-tick data-from="' + w.start + '"></span>' : esc(fmt.dur(a.dur))}</span><label>time</label></div>
+      ${live ? '' : `<div><span class="num">${esc(fmt.dur(a.dur))}</span><label>time</label></div>`}
       <div><span class="num">${fmt.int(a.vol)}</span><label>kg</label></div>
       <div><span class="num">${a.sets}</span><label>sets</label></div>
       ${a.prs ? `<div class="gold"><span class="num">${a.prs}</span><label>${a.prs === 1 ? 'record' : 'records'}</label></div>` : ''}

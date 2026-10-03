@@ -15,7 +15,7 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
   event.respondWith(caches.open(CACHE).then(async (cache) => {
     const cached = await cache.match(req, { ignoreSearch: true });
-    const fresh = fetch(req)
+    const fresh = fetch(req, { cache: 'no-cache' })   // always ask the server for the newest version
       .then((res) => { if (res && res.ok) cache.put(req, res.clone()); return res; })
       .catch(() => cached);
     return cached || fresh;
